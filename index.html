@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>บอร์ดอุปกรณ์สตูดิโอ</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="wrap header-inner">
+      <h1 id="studioName">บอร์ดอุปกรณ์สตูดิโอ</h1>
+      <div class="header-tools">
+        <input id="search" type="search" class="input" placeholder="ค้นหาชื่ออุปกรณ์…" />
+        <button id="refreshBtn" class="btn" title="โหลดข้อมูลใหม่">↻</button>
+        <button id="addBtn" class="btn btn-primary">+ เพิ่มอุปกรณ์</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- แถบข้อความสถานะ -->
+  <div id="banner" class="banner wrap" hidden></div>
+
+  <!-- บอร์ด Kanban -->
+  <main class="board-scroll">
+    <div id="board" class="board"></div>
+  </main>
+
+  <p class="hint wrap">
+    💡 ลากการ์ดข้ามคอลัมน์เพื่อเปลี่ยนสถานะ · คลิกการ์ดเพื่อกางดูอุปกรณ์แต่ละชิ้น · แตะปุ่ม ⋮ เพื่อย้าย/แก้ไข
+  </p>
+
+  <!-- Modal ฟอร์มเพิ่ม/แก้ไข -->
+  <div id="modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h2 id="modalTitle">เพิ่มอุปกรณ์</h2>
+      <form id="equipForm">
+        <input type="hidden" id="f_ids" />
+        <label>ชื่ออุปกรณ์ *
+          <input id="f_name" class="input" required maxlength="120" />
+        </label>
+        <div class="row">
+          <label>หมวดหมู่
+            <input id="f_category" class="input" list="categoryList" maxlength="60" placeholder="เช่น กล้อง, ไฟ, ไมค์" />
+            <datalist id="categoryList"></datalist>
+          </label>
+          <label id="countWrap">จำนวน (ชิ้น)
+            <input id="f_count" class="input" type="number" min="1" step="1" value="1" />
+          </label>
+        </div>
+        <div class="row">
+          <label>ที่เก็บ
+            <input id="f_location" class="input" maxlength="80" placeholder="เช่น ชั้น 2 ตู้ A" />
+          </label>
+          <label id="statusWrap">สถานะเริ่มต้น
+            <select id="f_status" class="input"></select>
+          </label>
+        </div>
+        <label>หมายเหตุ
+          <textarea id="f_note" class="input" rows="2" maxlength="300" placeholder="อาการ / รายละเอียดเพิ่มเติม"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="cancelBtn" class="btn">ยกเลิก</button>
+          <button type="submit" id="saveBtn" class="btn btn-primary">บันทึก</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- เมนูป๊อปอัป (สร้างด้วย JS) -->
+  <div id="popMenu" class="pop-menu" hidden></div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
