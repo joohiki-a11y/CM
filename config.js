@@ -8,7 +8,7 @@
 
 window.APP_CONFIG = {
   // URL ของ Google Apps Script Web App (ลงท้ายด้วย /exec)
-  API_URL: "",
+  API_URL: "https://script.google.com/a/macros/bitkub.com/s/AKfycbw2flw9hJBEhkeDltoUzQdDNehHye5cosHL95nr8cKd4w3teNqA_0Qx_xed1azyqWls/exec",
 
   // ชื่อสตูดิโอ (แสดงบนหัวเว็บ)
   STUDIO_NAME: "บอร์ดอุปกรณ์สตูดิโอ",
