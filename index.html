@@ -1,10 +1,185 @@
 <!doctype html>
 <html lang="th">
 <head>
+  <base target="_top" />
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>บอร์ดอุปกรณ์สตูดิโอ</title>
-  <link rel="stylesheet" href="styles.css" />
+  <style>
+:root {
+  --bg: #eef0f3;
+  --card: #ffffff;
+  --border: #e3e6ea;
+  --text: #1c1f23;
+  --muted: #6b7280;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "Sarabun", "Noto Sans Thai", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+
+/* Header */
+.app-header {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 20;
+}
+.header-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 16px; flex-wrap: wrap;
+}
+.app-header h1 { font-size: 19px; margin: 0; }
+.header-tools { display: flex; gap: 8px; align-items: center; }
+
+/* Buttons & inputs */
+.btn {
+  font: inherit; padding: 8px 14px;
+  border: 1px solid var(--border); background: var(--card); color: var(--text);
+  border-radius: var(--radius); cursor: pointer; transition: background .15s, border-color .15s;
+}
+.btn:hover { background: #f0f2f5; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+.input {
+  font: inherit; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--card); color: var(--text);
+}
+#search { min-width: 180px; }
+
+/* Banner */
+.banner { padding: 10px 14px; border-radius: var(--radius); margin: 14px auto; font-size: 14px; }
+.banner.info  { background: #e0edff; color: #1e40af; }
+.banner.error { background: #fee2e2; color: #991b1b; }
+.banner.ok    { background: #dcfce7; color: #166534; }
+
+.hint { color: var(--muted); font-size: 13px; margin: 8px auto 30px; }
+
+/* ---------- Board ---------- */
+.board-scroll { overflow-x: auto; padding: 20px 16px 8px; }
+.board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(240px, 1fr);
+  gap: 14px;
+  min-width: min-content;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.column {
+  background: #e6e9ee;
+  border-radius: 12px;
+  display: flex; flex-direction: column;
+  min-height: 120px;
+}
+.col-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px 8px; font-weight: 700; font-size: 14px;
+  position: sticky; top: 0;
+}
+.col-head .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.col-head .count {
+  margin-left: auto; background: rgba(0,0,0,.08);
+  color: var(--muted); font-size: 12px; font-weight: 700;
+  padding: 1px 9px; border-radius: 999px;
+}
+.col-body {
+  padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 10px;
+  flex: 1; min-height: 60px; border-radius: 0 0 12px 12px;
+  transition: background .12s;
+}
+.col-body.drop-hover { background: rgba(37,99,235,.10); outline: 2px dashed var(--primary); outline-offset: -4px; }
+.col-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 14px 0; }
+
+/* ---------- Card ---------- */
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-top: 3px solid var(--accent, var(--primary));
+  border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow);
+  cursor: grab; user-select: none;
+}
+.card:active { cursor: grabbing; }
+.card.dragging { opacity: .5; }
+.card-top { display: flex; align-items: flex-start; gap: 8px; }
+.card-name { font-weight: 600; font-size: 14px; flex: 1; word-break: break-word; }
+.card-menu-btn {
+  border: none; background: none; cursor: pointer; color: var(--muted);
+  font-size: 18px; line-height: 1; padding: 0 2px; border-radius: 6px;
+}
+.card-menu-btn:hover { background: #eef0f3; color: var(--text); }
+.card-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.qty-badge {
+  background: var(--accent, var(--primary)); color: #fff;
+  font-size: 12px; font-weight: 700; padding: 1px 9px; border-radius: 999px;
+}
+.card-cat { color: var(--muted); font-size: 12px; }
+
+/* หน่วยย่อย (units) เมื่อกางการ์ด */
+.units { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.unit {
+  display: flex; align-items: center; gap: 8px;
+  background: #f6f7f9; border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 8px; font-size: 12px; cursor: grab;
+}
+.unit:active { cursor: grabbing; }
+.unit.dragging { opacity: .5; }
+.unit .u-label { flex: 1; color: var(--text); word-break: break-word; }
+.unit .u-loc { color: var(--muted); }
+.unit .u-del {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 0 2px; border-radius: 5px;
+}
+.unit .u-del:hover { background: #fde2e2; color: #b91c1c; }
+
+/* ---------- Modal ---------- */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50;
+}
+.modal { background: var(--card); border-radius: 14px; padding: 22px; width: 100%; max-width: 480px; box-shadow: 0 10px 40px rgba(0,0,0,.2); }
+.modal h2 { margin: 0 0 16px; font-size: 18px; }
+#equipForm label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+#equipForm .input { display: block; width: 100%; margin-top: 4px; color: var(--text); }
+#equipForm .row { display: flex; gap: 12px; }
+#equipForm .row label { flex: 1; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+
+/* ---------- Popup menu ---------- */
+.pop-menu {
+  position: absolute; background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.16);
+  padding: 5px; z-index: 60; min-width: 180px;
+}
+.pop-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 8px 12px; border: none; background: none; font: inherit;
+  cursor: pointer; border-radius: 7px; color: var(--text);
+}
+.pop-menu button:hover { background: #f0f2f5; }
+.pop-menu .sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.pop-menu .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.pop-menu .danger { color: #b91c1c; }
+
+@media (max-width: 560px) {
+  .app-header h1 { font-size: 17px; width: 100%; }
+  #equipForm .row { flex-direction: column; gap: 0; }
+}
+
+  </style>
 </head>
 <body>
   <header class="app-header">
@@ -18,10 +193,8 @@
     </div>
   </header>
 
-  <!-- แถบข้อความสถานะ -->
   <div id="banner" class="banner wrap" hidden></div>
 
-  <!-- บอร์ด Kanban -->
   <main class="board-scroll">
     <div id="board" class="board"></div>
   </main>
@@ -30,33 +203,32 @@
     💡 ลากการ์ดข้ามคอลัมน์เพื่อเปลี่ยนสถานะ · คลิกการ์ดเพื่อกางดูอุปกรณ์แต่ละชิ้น · แตะปุ่ม ⋮ เพื่อย้าย/แก้ไข
   </p>
 
-  <!-- Modal ฟอร์มเพิ่ม/แก้ไข -->
   <div id="modal" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <h2 id="modalTitle">เพิ่มอุปกรณ์</h2>
       <form id="equipForm">
-        <input type="hidden" id="f_ids" />
-        <label>ชื่ออุปกรณ์ *
+        <input type="hidden" id="f_id" />
+        <label>ชื่ออุปกรณ์ (Equipment) *
           <input id="f_name" class="input" required maxlength="120" />
         </label>
         <div class="row">
-          <label>หมวดหมู่
-            <input id="f_category" class="input" list="categoryList" maxlength="60" placeholder="เช่น กล้อง, ไฟ, ไมค์" />
+          <label>หมวดหมู่ (Category)
+            <input id="f_category" class="input" list="categoryList" maxlength="60" placeholder="เช่น Camera, Light, Mic" />
             <datalist id="categoryList"></datalist>
           </label>
-          <label id="countWrap">จำนวน (ชิ้น)
-            <input id="f_count" class="input" type="number" min="1" step="1" value="1" />
+          <label>S/N
+            <input id="f_sn" class="input" maxlength="80" placeholder="Serial number (ถ้ามี)" />
           </label>
         </div>
         <div class="row">
-          <label>ที่เก็บ
-            <input id="f_location" class="input" maxlength="80" placeholder="เช่น ชั้น 2 ตู้ A" />
+          <label id="countWrap">จำนวน (ชิ้น)
+            <input id="f_count" class="input" type="number" min="1" step="1" value="1" />
           </label>
           <label id="statusWrap">สถานะเริ่มต้น
             <select id="f_status" class="input"></select>
           </label>
         </div>
-        <label>หมายเหตุ
+        <label>หมายเหตุ (Note)
           <textarea id="f_note" class="input" rows="2" maxlength="300" placeholder="อาการ / รายละเอียดเพิ่มเติม"></textarea>
         </label>
         <div class="modal-actions">
@@ -67,10 +239,436 @@
     </div>
   </div>
 
-  <!-- เมนูป๊อปอัป (สร้างด้วย JS) -->
   <div id="popMenu" class="pop-menu" hidden></div>
 
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script>
+window.APP_CONFIG = {
+  STUDIO_NAME: "บอร์ดอุปกรณ์สตูดิโอ",
+  STATUSES: [
+    { key: "good",   label: "ใช้งานได้", color: "#16a34a" },
+    // อยากได้ 4 สถานะ? เพิ่มคอลัมน์ "Partial" ในชีต + เปิด STATUS_DEFS ใน Code.gs แล้วเปิดบรรทัดนี้:
+    // { key: "partial", label: "เสียหายบางส่วน", color: "#d97706" },
+    { key: "repair", label: "ส่งซ่อม",   color: "#2563eb" },
+    { key: "broke",  label: "เสียถาวร",  color: "#dc2626" },
+  ],
+};
+
+/* ==================================================================
+   บอร์ดอุปกรณ์สตูดิโอ — Kanban (แบบนับจำนวนตามชีต)
+   โครงสร้างชีต: Category | No. | Equipment | S/N | Good | Need Repair | Broke | Total | Note
+   - 1 แถว = อุปกรณ์ 1 รายการ, จำนวนกระจายอยู่ในคอลัมน์สถานะ
+   - บนบอร์ด: แถวนั้นแตกเป็นการ์ดในแต่ละคอลัมน์ตามจำนวน
+   - ลากการ์ด/ชิ้น ข้ามคอลัมน์ = ปรับจำนวนในชีต (Total คำนวณอัตโนมัติ)
+   ================================================================== */
+
+(function () {
+  "use strict";
+
+  const CFG = window.APP_CONFIG || {};
+  const API_URL = (CFG.API_URL || "").trim();
+  const STATUSES = CFG.STATUSES || [];
+  const STATUS_MAP = Object.fromEntries(STATUSES.map((s) => [s.key, s]));
+
+  const $ = (id) => document.getElementById(id);
+  const board = $("board");
+  const banner = $("banner");
+  const popMenu = $("popMenu");
+
+  let rows = [];                 // ทุกรายการ (แถวในชีต)
+  const expanded = new Set();    // "id||status" ที่กางอยู่
+  let drag = null;               // { id, from, amount }
+
+  // ================================================================
+  function init() {
+    $("studioName").textContent = CFG.STUDIO_NAME || "บอร์ดอุปกรณ์สตูดิโอ";
+    document.title = CFG.STUDIO_NAME || "บอร์ดอุปกรณ์สตูดิโอ";
+    for (const s of STATUSES) $("f_status").appendChild(new Option(s.label, s.key));
+
+    $("addBtn").addEventListener("click", () => openForm());
+    $("refreshBtn").addEventListener("click", loadData);
+    $("cancelBtn").addEventListener("click", closeForm);
+    $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeForm(); });
+    $("equipForm").addEventListener("submit", onSubmit);
+    $("search").addEventListener("input", render);
+    document.addEventListener("click", closePopMenu);
+    window.addEventListener("scroll", closePopMenu, true);
+
+    loadData();
+  }
+
+  // ================================================================
+  // API
+  // ================================================================
+  // เรียกฟังก์ชันบนเซิร์ฟเวอร์ (Apps Script) แทนการ fetch — ไม่มีปัญหา CORS/ล็อกอิน
+  function serverCall(name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      var runner = google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(function (err) {
+          reject(new Error(err && err.message ? err.message : String(err)));
+        });
+      runner[name].apply(runner, args);
+    });
+  }
+
+  function api(action, payload) {
+    payload = payload || {};
+    if (action === "list")         return serverCall("readAll");
+    if (action === "add")          return serverCall("addRow", payload.row, payload.status, payload.count);
+    if (action === "setCounts")    return serverCall("setCounts", payload.id, payload.counts);
+    if (action === "updateFields") return serverCall("updateFields", payload.id, payload.fields);
+    if (action === "deleteRow")    return serverCall("deleteRow", payload.id);
+    return Promise.reject(new Error("unknown action: " + action));
+  }
+
+  async function loadData() {
+    showBanner("กำลังโหลดข้อมูล…", "info");
+    try {
+      const items = await api("list");
+      rows = items.map(normalizeRow);
+      hideBanner();
+      buildCategoryList();
+      render();
+    } catch (err) {
+      showBanner("โหลดข้อมูลไม่สำเร็จ: " + err.message, "error");
+    }
+  }
+
+  // ให้ทุกแถวมี counts ครบทุกสถานะ (เติม 0 ที่ขาด)
+  function normalizeRow(it) {
+    const counts = {};
+    for (const s of STATUSES) counts[s.key] = Number(it.counts?.[s.key]) || 0;
+    return {
+      id: it.id, category: it.category || "", no: it.no,
+      equipment: it.equipment || "", sn: it.sn || "", note: it.note || "",
+      counts,
+    };
+  }
+
+  // ================================================================
+  // แสดงผลบอร์ด
+  // ================================================================
+  function render() {
+    const q = $("search").value.trim().toLowerCase();
+    board.innerHTML = "";
+
+    for (const st of STATUSES) {
+      const cards = rows.filter((r) => {
+        if ((r.counts[st.key] || 0) <= 0) return false;
+        if (q) {
+          const hay = `${r.equipment} ${r.category} ${r.sn}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+      const total = cards.reduce((sum, r) => sum + r.counts[st.key], 0);
+      board.appendChild(renderColumn(st, cards, total));
+    }
+  }
+
+  function renderColumn(st, cards, total) {
+    const col = document.createElement("div");
+    col.className = "column";
+
+    const head = document.createElement("div");
+    head.className = "col-head";
+    head.innerHTML =
+      `<span class="dot" style="background:${st.color}"></span>` +
+      `<span>${st.label}</span>` +
+      `<span class="count">${total}</span>`;
+    col.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "col-body";
+    body.addEventListener("dragover", (e) => { e.preventDefault(); body.classList.add("drop-hover"); });
+    body.addEventListener("dragleave", () => body.classList.remove("drop-hover"));
+    body.addEventListener("drop", (e) => {
+      e.preventDefault();
+      body.classList.remove("drop-hover");
+      if (drag && drag.from !== st.key) moveCount(drag.id, drag.from, st.key, drag.amount);
+      drag = null;
+    });
+
+    if (cards.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "col-empty";
+      empty.textContent = "— ว่าง —";
+      body.appendChild(empty);
+    } else {
+      cards.sort((a, b) => (a.equipment || "").localeCompare(b.equipment || "", "th"));
+      for (const r of cards) body.appendChild(renderCard(st, r));
+    }
+    col.appendChild(body);
+    return col;
+  }
+
+  function renderCard(st, r) {
+    const qty = r.counts[st.key];
+    const key = r.id + "||" + st.key;
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.setProperty("--accent", st.color);
+    card.draggable = true;
+
+    card.addEventListener("dragstart", (e) => {
+      drag = { id: r.id, from: st.key, amount: qty };
+      card.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", key);
+    });
+    card.addEventListener("dragend", () => card.classList.remove("dragging"));
+
+    const top = document.createElement("div");
+    top.className = "card-top";
+    const name = document.createElement("div");
+    name.className = "card-name";
+    name.textContent = r.equipment || "(ไม่มีชื่อ)";
+    const menuBtn = document.createElement("button");
+    menuBtn.className = "card-menu-btn";
+    menuBtn.textContent = "⋮";
+    menuBtn.title = "ตัวเลือก";
+    menuBtn.addEventListener("click", (e) => { e.stopPropagation(); openCardMenu(e, st, r); });
+    top.append(name, menuBtn);
+
+    const meta = document.createElement("div");
+    meta.className = "card-meta";
+    const badge = document.createElement("span");
+    badge.className = "qty-badge";
+    badge.textContent = qty + " ชิ้น";
+    meta.appendChild(badge);
+    if (r.category) meta.appendChild(tag(r.category));
+    if (r.sn) meta.appendChild(tag("S/N: " + r.sn));
+
+    card.append(top, meta);
+
+    card.addEventListener("click", () => {
+      if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+      render();
+    });
+
+    if (expanded.has(key)) card.appendChild(renderUnits(st, r, qty));
+    return card;
+  }
+
+  function tag(text) {
+    const el = document.createElement("span");
+    el.className = "card-cat";
+    el.textContent = text;
+    return el;
+  }
+
+  // กางเป็นชิ้นย่อย (ลากทีละชิ้นได้)
+  function renderUnits(st, r, qty) {
+    const box = document.createElement("div");
+    box.className = "units";
+    for (let i = 0; i < qty; i++) {
+      const row = document.createElement("div");
+      row.className = "unit";
+      row.draggable = true;
+
+      row.addEventListener("dragstart", (e) => {
+        e.stopPropagation();
+        drag = { id: r.id, from: st.key, amount: 1 };
+        row.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", r.id);
+      });
+      row.addEventListener("dragend", () => row.classList.remove("dragging"));
+
+      const label = document.createElement("span");
+      label.className = "u-label";
+      label.textContent = "ชิ้นที่ " + (i + 1);
+
+      const del = document.createElement("button");
+      del.className = "u-del";
+      del.textContent = "×";
+      del.title = "เอาออก 1 ชิ้น";
+      del.addEventListener("click", (e) => { e.stopPropagation(); removePiece(r, st.key); });
+
+      row.addEventListener("click", (e) => {
+        if (e.target === del) return;
+        e.stopPropagation();
+        openUnitMenu(e, st, r);
+      });
+
+      row.append(label, del);
+      box.appendChild(row);
+    }
+    return box;
+  }
+
+  function renderBoardSkeleton() {
+    board.innerHTML = "";
+    for (const st of STATUSES) board.appendChild(renderColumn(st, [], 0));
+  }
+
+  // ================================================================
+  // เมนูป๊อปอัป
+  // ================================================================
+  function openPopMenu(e, options) {
+    closePopMenu();
+    popMenu.innerHTML = "";
+    for (const opt of options) {
+      if (opt.sep) { const s = document.createElement("div"); s.className = "sep"; popMenu.appendChild(s); continue; }
+      const b = document.createElement("button");
+      if (opt.color) b.innerHTML = `<span class="dot" style="background:${opt.color}"></span>`;
+      b.appendChild(document.createTextNode(opt.label));
+      if (opt.danger) b.classList.add("danger");
+      b.addEventListener("click", (ev) => { ev.stopPropagation(); closePopMenu(); opt.onClick(); });
+      popMenu.appendChild(b);
+    }
+    popMenu.hidden = false;
+    const mw = popMenu.offsetWidth, mh = popMenu.offsetHeight;
+    let x = e.clientX, y = e.clientY;
+    if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
+    if (y + mh > window.innerHeight - 8) y = window.innerHeight - mh - 8;
+    popMenu.style.left = (window.scrollX + x) + "px";
+    popMenu.style.top = (window.scrollY + y) + "px";
+  }
+  function closePopMenu() { popMenu.hidden = true; }
+
+  function openCardMenu(e, st, r) {
+    const qty = r.counts[st.key];
+    const opts = [];
+    for (const s of STATUSES) {
+      if (s.key === st.key) continue;
+      opts.push({ label: `ย้ายทั้งหมด (${qty}) ไป “${s.label}”`, color: s.color, onClick: () => moveCount(r.id, st.key, s.key, qty) });
+    }
+    opts.push({ sep: true });
+    opts.push({ label: "แก้ไขข้อมูล", onClick: () => openForm(r) });
+    opts.push({ label: `เอาออกจาก “${st.label}” (${qty} ชิ้น)`, danger: true, onClick: () => clearStatus(r, st.key) });
+    opts.push({ label: "ลบรายการนี้ทั้งหมด", danger: true, onClick: () => deleteRowConfirm(r) });
+    openPopMenu(e, opts);
+  }
+
+  function openUnitMenu(e, st, r) {
+    const opts = [];
+    for (const s of STATUSES) {
+      if (s.key === st.key) continue;
+      opts.push({ label: `ย้ายชิ้นนี้ไป “${s.label}”`, color: s.color, onClick: () => moveCount(r.id, st.key, s.key, 1) });
+    }
+    opts.push({ sep: true });
+    opts.push({ label: "เอาออก 1 ชิ้น", danger: true, onClick: () => removePiece(r, st.key) });
+    openPopMenu(e, opts);
+  }
+
+  // ================================================================
+  // การกระทำ (ทั้งหมดคือการปรับ counts แล้วเรียก setCounts)
+  // ================================================================
+  async function persistCounts(r, prevCounts) {
+    render();
+    try {
+      await api("setCounts", { id: r.id, counts: r.counts });
+    } catch (err) {
+      r.counts = prevCounts; // rollback
+      render();
+      showBanner("บันทึกไม่สำเร็จ: " + err.message, "error");
+    }
+  }
+
+  function moveCount(id, from, to, amount) {
+    const r = rows.find((x) => x.id === id);
+    if (!r) return;
+    const amt = Math.min(amount, r.counts[from] || 0);
+    if (amt <= 0) return;
+    const prev = { ...r.counts };
+    r.counts[from] -= amt;
+    r.counts[to] = (r.counts[to] || 0) + amt;
+    persistCounts(r, prev);
+  }
+
+  function removePiece(r, status) {
+    if ((r.counts[status] || 0) <= 0) return;
+    const prev = { ...r.counts };
+    r.counts[status] -= 1;
+    persistCounts(r, prev);
+  }
+
+  function clearStatus(r, status) {
+    if (!confirm(`เอา "${r.equipment}" ออกจากสถานะนี้ (${r.counts[status]} ชิ้น) ใช่หรือไม่?`)) return;
+    const prev = { ...r.counts };
+    r.counts[status] = 0;
+    persistCounts(r, prev);
+  }
+
+  async function deleteRowConfirm(r) {
+    if (!confirm(`ลบรายการ "${r.equipment}" ทั้งหมด (ทุกสถานะ) ใช่หรือไม่?`)) return;
+    try { await api("deleteRow", { id: r.id }); await loadData(); }
+    catch (err) { showBanner("ลบไม่สำเร็จ: " + err.message, "error"); }
+  }
+
+  // ================================================================
+  // ฟอร์มเพิ่ม / แก้ไข
+  // ================================================================
+  function openForm(r) {
+    const editing = !!r;
+    $("modalTitle").textContent = editing ? "แก้ไขข้อมูล" : "เพิ่มอุปกรณ์";
+    $("f_id").value = editing ? r.id : "";
+    $("f_name").value = editing ? r.equipment : "";
+    $("f_category").value = editing ? r.category : "";
+    $("f_sn").value = editing ? r.sn : "";
+    $("f_note").value = editing ? r.note : "";
+    $("f_count").value = 1;
+    $("f_status").value = STATUSES[0]?.key;
+    $("countWrap").style.display = editing ? "none" : "";
+    $("statusWrap").style.display = editing ? "none" : "";
+    $("modal").hidden = false;
+    $("f_name").focus();
+  }
+  function closeForm() { $("modal").hidden = true; }
+
+  async function onSubmit(e) {
+    e.preventDefault();
+    const saveBtn = $("saveBtn");
+    saveBtn.disabled = true;
+
+    const id = $("f_id").value;
+    const fields = {
+      equipment: $("f_name").value.trim(),
+      category: $("f_category").value.trim(),
+      sn: $("f_sn").value.trim(),
+      note: $("f_note").value.trim(),
+    };
+
+    try {
+      if (id) {
+        await api("updateFields", { id, fields });
+      } else {
+        const count = Math.max(1, Number($("f_count").value) || 1);
+        await api("add", { row: fields, status: $("f_status").value, count });
+      }
+      closeForm();
+      await loadData();
+      showBanner("บันทึกเรียบร้อย", "ok");
+      setTimeout(hideBanner, 1800);
+    } catch (err) {
+      showBanner("บันทึกไม่สำเร็จ: " + err.message, "error");
+    } finally {
+      saveBtn.disabled = false;
+    }
+  }
+
+  // ================================================================
+  // Helpers
+  // ================================================================
+  function buildCategoryList() {
+    const cats = [...new Set(rows.map((r) => r.category).filter(Boolean))].sort();
+    const dl = $("categoryList");
+    dl.innerHTML = "";
+    for (const c of cats) dl.appendChild(new Option(c));
+  }
+
+  function showBanner(msg, type) {
+    banner.textContent = msg;
+    banner.className = "banner wrap " + (type || "info");
+    banner.hidden = false;
+  }
+  function hideBanner() { banner.hidden = true; }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+
+  </script>
 </body>
 </html>
