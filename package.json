@@ -1,0 +1,11 @@
+{
+  "name": "bitkub-studio-equipment",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Google Apps Script studio equipment inventory and production checklists",
+  "scripts": {
+    "check": "node scripts/check.cjs",
+    "test:readiness": "node --test tests/readiness.test.cjs"
+  },
+  "engines": { "node": ">=20" }
+}
