@@ -1,0 +1,1252 @@
+<script>
+/* CM UI v5: Bitkub CI + Unit Details */
+/* ==================================================================
+บอร์ดอุปกรณ์สตูดิโอ — Kanban (drag ซ้าย→ขวา เปลี่ยนสถานะ)
+- แต่ละ "ชิ้น" ของอุปกรณ์ = 1 record ในชีต
+- อุปกรณ์ชื่อเดียวกันในคอลัมน์เดียวกัน = รวมเป็นการ์ดเดียว (โชว์จำนวน)
+- คลิกการ์ด = กางดูอุปกรณ์แต่ละชิ้น (ลากทีละชิ้นได้)
+================================================================== */
+(function () {
+"use strict";
+const CFG = window.APP_CONFIG || {};
+const STATUSES = CFG.STATUSES || [];
+const STATUS_MAP = Object.fromEntries(STATUSES.map((s) => [s.key, s]));
+const $ = (id) => document.getElementById(id);
+const board = $("board");
+const banner = $("banner");
+const popMenu = $("popMenu");
+let items = []; // ทุกชิ้น (units)
+let selectedCategory = "__all__"; // หมวดหมู่ที่กำลังแสดง
+const expanded = new Set(); // groupKey ที่กางอยู่
+let drag = null; // { ids:[...], fromStatus }
+let currentView = "inventory";
+let productions = [];
+let currentProduction = null;
+let productionFormMode = "create";
+let selectableUnits = [];
+let pickerSelection = new Set();
+let pickerCategory = null;
+const pendingChecklistUpdates = new Map();
+let checklistSyncTimer = null;
+let checklistSyncInFlight = false;
+let checklistSyncPromise = null;
+// ================================================================
+function init() {
+$("studioName").textContent = CFG.STUDIO_NAME || "บอร์ดอุปกรณ์สตูดิโอ";
+document.title = CFG.STUDIO_NAME || "บอร์ดอุปกรณ์สตูดิโอ";
+$("openSheetBtn").href = CFG.SHEET_URL || "#";
+for (const s of STATUSES) {
+$("f_status").appendChild(new Option(s.label, s.key));
+$("u_status").appendChild(new Option(s.label, s.key));
+}
+$("addBtn").addEventListener("click", () => openForm());
+$("refreshBtn").addEventListener("click", () => {
+if (currentView === "inventory") return loadData(true);
+return currentProduction ? openProduction(currentProduction.job.id) : loadProductions();
+});
+$("cancelBtn").addEventListener("click", closeForm);
+$("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeForm(); });
+$("equipForm").addEventListener("submit", onSubmit);
+$("unitCancelBtn").addEventListener("click", closeUnitForm);
+$("unitModal").addEventListener("click", (e) => { if (e.target.id === "unitModal") closeUnitForm(); });
+$("unitForm").addEventListener("submit", onUnitSubmit);
+$("search").addEventListener("input", render);
+$("inventoryTab").addEventListener("click", () => showView("inventory"));
+$("productionsTab").addEventListener("click", () => showView("productions"));
+$("createProductionBtn").addEventListener("click", openProductionForm);
+$("editProductionBtn").addEventListener("click", openProductionEditForm);
+$("copyProductionBtn").addEventListener("click", openCopyProductionForm);
+$("productionCancelBtn").addEventListener("click", closeProductionForm);
+$("productionModal").addEventListener("click", (e) => { if (e.target.id === "productionModal") closeProductionForm(); });
+$("productionForm").addEventListener("submit", onProductionSubmit);
+$("copyProductionCancelBtn").addEventListener("click", closeCopyProductionForm);
+$("copyProductionModal").addEventListener("click", (e) => { if (e.target.id === "copyProductionModal") closeCopyProductionForm(); });
+$("copyProductionForm").addEventListener("submit", onCopyProductionSubmit);
+$("backToProductionsBtn").addEventListener("click", () => { showProductionHome(); loadProductions(); });
+$("shareJobBtn").addEventListener("click", copyProductionLink);
+$("addJobEquipmentBtn").addEventListener("click", openUnitPicker);
+$("closeJobBtn").addEventListener("click", toggleProductionClosed);
+$("pickerCancelBtn").addEventListener("click", closeUnitPicker);
+$("pickerBackBtn").addEventListener("click", () => {
+pickerCategory = null;
+$("pickerSearch").value = "";
+renderUnitPicker();
+});
+$("unitPickerModal").addEventListener("click", (e) => { if (e.target.id === "unitPickerModal") closeUnitPicker(); });
+$("pickerSearch").addEventListener("input", renderUnitPicker);
+$("pickerAddBtn").addEventListener("click", addSelectedUnits);
+document.addEventListener("click", closePopMenu);
+window.addEventListener("scroll", closePopMenu, true);
+if (window.INITIAL_JOB_ID) {
+showView("productions", false);
+openProduction(window.INITIAL_JOB_ID);
+} else {
+loadData();
+}
+}
+// ================================================================
+// API
+// ================================================================
+function api(action, payload = {}) {
+return new Promise((resolve, reject) => {
+if (!window.google || !google.script || !google.script.run) {
+reject(new Error("หน้านี้ต้องเปิดผ่าน Google Apps Script Web App"));
+return;
+}
+const runner = google.script.run
+.withSuccessHandler(resolve)
+.withFailureHandler((err) => reject(new Error(err && err.message ? err.message : String(err))));
+if (action === "list") return runner.listItems();
+if (action === "refreshList") return runner.refreshItemsFromMaster();
+if (action === "add") return runner.addItem(
+payload.item,
+payload.status || (payload.item && payload.item.status),
+payload.count
+);
+if (action === "move") return runner.moveUnits(payload.ids, payload.status);
+if (action === "updateGroup") return runner.updateGroup(payload.ids, payload.fields);
+if (action === "updateUnit") return runner.updateUnit(payload.id, payload.fields);
+if (action === "delete") return runner.deleteUnits([payload.id]);
+if (action === "deleteGroup") return runner.deleteUnits(payload.ids);
+if (action === "listProductions") return runner.listProductions();
+if (action === "createProduction") return runner.createProduction(payload.data);
+if (action === "updateProduction") return runner.updateProduction(payload.jobId, payload.data);
+if (action === "getProduction") return runner.getProduction(payload.jobId);
+if (action === "listProductionUnitOptions") return runner.listProductionUnitOptions(payload.jobId);
+if (action === "setEquipmentFavorite") return runner.setEquipmentFavorite(payload.equipmentId, payload.value);
+if (action === "addProductionUnits") return runner.addProductionUnits(payload.jobId, payload.unitIds);
+if (action === "copyProductionItems") return runner.copyProductionItems(payload.targetJobId, payload.sourceJobId);
+if (action === "removeProductionUnit") return runner.removeProductionUnit(payload.jobId, payload.unitId);
+if (action === "removeProductionUnits") return runner.removeProductionUnits(payload.jobId, payload.unitIds);
+if (action === "setChecklistState") return runner.setChecklistState(payload.jobId, payload.unitId, payload.field, payload.value);
+if (action === "setChecklistStates") return runner.setChecklistStates(payload.jobId, payload.updates);
+if (action === "closeProduction") return runner.closeProduction(payload.jobId);
+if (action === "reopenProduction") return runner.reopenProduction(payload.jobId);
+reject(new Error("ไม่รู้จักคำสั่ง: " + action));
+});
+}
+async function loadData(syncMaster = false) {
+showBanner(syncMaster ? "กำลังซิงก์ข้อมูลจากชีต…" : "กำลังโหลดข้อมูล…", "info");
+try {
+if (syncMaster) {
+const result = await api("refreshList");
+items = (result && result.items) || [];
+if (result && result.syncWarning) {
+showBanner("โหลดข้อมูลแล้ว แต่ซิงก์จากชีตไม่สำเร็จ: " + result.syncWarning, "error");
+} else {
+hideBanner();
+}
+} else {
+items = await api("list");
+hideBanner();
+}
+buildCategoryList();
+buildCategoryFilters();
+render();
+} catch (err) {
+showBanner("โหลดข้อมูลไม่สำเร็จ: " + err.message, "error");
+}
+}
+// ================================================================
+// จัดกลุ่ม + แสดงผลบอร์ด
+// ================================================================
+function groupKey(status, name) { return status + "||" + (name || "").trim().toLowerCase(); }
+function normalizedCategory(value) {
+return (value || "ไม่มีหมวดหมู่").trim() || "ไม่มีหมวดหมู่";
+}
+const CATEGORY_COLORS = [
+"#007339", "#00bf61", "#02d767", "#77c900",
+"#a3ed24", "#507b62", "#404040", "#969696"
+];
+function categoryColor(category) {
+const text = normalizedCategory(category);
+let hash = 0;
+for (let i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+return CATEGORY_COLORS[Math.abs(hash) % CATEGORY_COLORS.length];
+}
+function render() {
+const q = $("search").value.trim().toLowerCase();
+board.innerHTML = "";
+for (const st of STATUSES) {
+const colUnits = items.filter(
+(it) => it.status === st.key &&
+(selectedCategory === "__all__" || normalizedCategory(it.category) === selectedCategory) &&
+(!q || (it.name || "").toLowerCase().includes(q))
+);
+// จัดกลุ่มตามชื่อ
+const groups = new Map();
+for (const it of colUnits) {
+const k = groupKey(st.key, it.name);
+if (!groups.has(k)) groups.set(k, []);
+groups.get(k).push(it);
+}
+// ตัวเลขบนหัวคอลัมน์นับจำนวนชนิด (จำนวนการ์ด) ไม่ใช่จำนวนชิ้น
+board.appendChild(renderColumn(st, groups, groups.size));
+}
+}
+function renderColumn(st, groups, total) {
+const col = document.createElement("div");
+col.className = "column";
+const head = document.createElement("div");
+head.className = "col-head";
+head.innerHTML =
+`<span class="dot" style="background:${st.color}"></span>` +
+`<span>${st.label}</span>` +
+`<span class="count">${total}</span>`;
+col.appendChild(head);
+const body = document.createElement("div");
+body.className = "col-body";
+body.dataset.status = st.key;
+// drop target
+body.addEventListener("dragover", (e) => { e.preventDefault(); body.classList.add("drop-hover"); });
+body.addEventListener("dragleave", () => body.classList.remove("drop-hover"));
+body.addEventListener("drop", (e) => {
+e.preventDefault();
+body.classList.remove("drop-hover");
+if (drag && drag.fromStatus !== st.key) moveUnits(drag.ids, st.key);
+drag = null;
+});
+if (groups.size === 0) {
+const empty = document.createElement("div");
+empty.className = "col-empty";
+empty.textContent = "— ว่าง —";
+body.appendChild(empty);
+} else {
+// เรียงตามชื่อ
+const sorted = [...groups.entries()].sort((a, b) =>
+(a[1][0].name || "").localeCompare(b[1][0].name || "", "th")
+);
+for (const [key, units] of sorted) body.appendChild(renderCard(st, key, units));
+}
+col.appendChild(body);
+return col;
+}
+function renderCard(st, key, units) {
+const first = units[0];
+const card = document.createElement("div");
+card.className = "card";
+card.style.setProperty("--accent", st.color);
+card.style.setProperty("--category", categoryColor(first.category));
+card.draggable = true;
+const ids = units.map((u) => u.id);
+// ลากทั้งการ์ด = ย้ายทั้งกลุ่ม
+card.addEventListener("dragstart", (e) => {
+drag = { ids, fromStatus: st.key };
+card.classList.add("dragging");
+e.dataTransfer.effectAllowed = "move";
+e.dataTransfer.setData("text/plain", key);
+});
+card.addEventListener("dragend", () => card.classList.remove("dragging"));
+// ส่วนหัวการ์ด
+const top = document.createElement("div");
+top.className = "card-top";
+const name = document.createElement("div");
+name.className = "card-name";
+name.textContent = first.name || "(ไม่มีชื่อ)";
+const menuBtn = document.createElement("button");
+menuBtn.className = "card-menu-btn";
+menuBtn.textContent = "⋮";
+menuBtn.title = "ตัวเลือก";
+menuBtn.addEventListener("click", (e) => { e.stopPropagation(); openCardMenu(e, st, units); });
+top.append(name, menuBtn);
+const meta = document.createElement("div");
+meta.className = "card-meta";
+const badge = document.createElement("span");
+badge.className = "qty-badge";
+badge.textContent = units.length + " ชิ้น";
+meta.appendChild(badge);
+if (first.category) {
+const cat = document.createElement("span");
+cat.className = "card-cat";
+cat.textContent = first.category;
+cat.style.setProperty("--category", categoryColor(first.category));
+meta.appendChild(cat);
+}
+card.append(top, meta);
+// คลิกการ์ด = กาง/พับ รายชิ้น
+card.addEventListener("click", () => {
+if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+render();
+});
+if (expanded.has(key)) card.appendChild(renderUnits(st, units));
+return card;
+}
+function renderUnits(st, units) {
+const box = document.createElement("div");
+box.className = "units";
+units.forEach((u, i) => {
+const row = document.createElement("div");
+row.className = "unit";
+row.draggable = true;
+row.addEventListener("dragstart", (e) => {
+e.stopPropagation();
+drag = { ids: [u.id], fromStatus: st.key };
+row.classList.add("dragging");
+e.dataTransfer.effectAllowed = "move";
+e.dataTransfer.setData("text/plain", u.id);
+});
+row.addEventListener("dragend", () => row.classList.remove("dragging"));
+const detail = document.createElement("div");
+detail.className = "u-detail";
+const label = document.createElement("span");
+label.className = "u-label";
+label.textContent = u.serial || u.id;
+const sub = document.createElement("span");
+sub.className = "u-sub";
+sub.textContent = [u.id, u.location].filter(Boolean).join(" · ");
+detail.append(label, sub);
+const edit = document.createElement("button");
+edit.className = "u-edit";
+edit.textContent = "แก้ไข";
+edit.title = "แก้ไข S/N และรายละเอียดรายชิ้น";
+edit.addEventListener("click", (e) => { e.stopPropagation(); openUnitForm(u); });
+const del = document.createElement("button");
+del.className = "u-del";
+del.textContent = "×";
+del.title = "ลบชิ้นนี้";
+del.addEventListener("click", (e) => { e.stopPropagation(); deleteUnit(u); });
+// คลิกชิ้น = เมนูย้าย
+row.addEventListener("click", (e) => {
+if (e.target === del || e.target === edit) return;
+e.stopPropagation();
+openUnitMenu(e, st, u);
+});
+row.append(detail, edit, del);
+box.appendChild(row);
+});
+return box;
+}
+function renderBoardSkeleton() {
+board.innerHTML = "";
+for (const st of STATUSES) board.appendChild(renderColumn(st, new Map(), 0));
+}
+// ================================================================
+// เมนูป๊อปอัป
+// ================================================================
+function openPopMenu(e, options) {
+closePopMenu();
+popMenu.innerHTML = "";
+for (const opt of options) {
+if (opt.sep) { const s = document.createElement("div"); s.className = "sep"; popMenu.appendChild(s); continue; }
+const b = document.createElement("button");
+if (opt.color) b.innerHTML = `<span class="dot" style="background:${opt.color}"></span>`;
+b.appendChild(document.createTextNode(opt.label));
+if (opt.danger) b.classList.add("danger");
+b.addEventListener("click", (ev) => { ev.stopPropagation(); closePopMenu(); opt.onClick(); });
+popMenu.appendChild(b);
+}
+popMenu.hidden = false;
+const mw = popMenu.offsetWidth, mh = popMenu.offsetHeight;
+let x = e.clientX, y = e.clientY;
+if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
+if (y + mh > window.innerHeight - 8) y = window.innerHeight - mh - 8;
+popMenu.style.left = (window.scrollX + x) + "px";
+popMenu.style.top = (window.scrollY + y) + "px";
+}
+function closePopMenu() { popMenu.hidden = true; }
+function openCardMenu(e, st, units) {
+const ids = units.map((u) => u.id);
+const opts = [];
+for (const s of STATUSES) {
+if (s.key === st.key) continue;
+opts.push({ label: "ย้ายทั้งกลุ่มไป “" + s.label + "”", color: s.color, onClick: () => moveUnits(ids, s.key) });
+}
+opts.push({ sep: true });
+opts.push({ label: "แก้ไขข้อมูล", onClick: () => openForm(units) });
+opts.push({ label: "ลบทั้งกลุ่ม (" + units.length + " ชิ้น)", danger: true, onClick: () => deleteGroup(units) });
+openPopMenu(e, opts);
+}
+function openUnitMenu(e, st, u) {
+const opts = [];
+opts.push({ label: "แก้ไข S/N / รายละเอียด", onClick: () => openUnitForm(u) });
+opts.push({ sep: true });
+for (const s of STATUSES) {
+if (s.key === st.key) continue;
+opts.push({ label: "ย้ายชิ้นนี้ไป “" + s.label + "”", color: s.color, onClick: () => moveUnits([u.id], s.key) });
+}
+opts.push({ sep: true });
+opts.push({ label: "ลบชิ้นนี้", danger: true, onClick: () => deleteUnit(u) });
+openPopMenu(e, opts);
+}
+// ================================================================
+// การกระทำ (ย้าย / เพิ่ม / แก้ / ลบ)
+// ================================================================
+async function moveUnits(ids, newStatus) {
+const idSet = new Set(ids);
+const affected = items.filter((it) => idSet.has(it.id));
+const prev = affected.map((it) => it.status);
+affected.forEach((it) => (it.status = newStatus)); // optimistic
+render();
+try {
+await api("move", { ids, status: newStatus });
+} catch (err) {
+affected.forEach((it, i) => (it.status = prev[i])); // rollback
+render();
+showBanner("ย้ายไม่สำเร็จ: " + err.message, "error");
+}
+}
+function openForm(units) {
+const editing = Array.isArray(units) && units.length > 0;
+const first = editing ? units[0] : null;
+$("modalTitle").textContent = editing ? "แก้ไขข้อมูลกลุ่ม" : "เพิ่มอุปกรณ์";
+$("f_ids").value = editing ? units.map((u) => u.id).join(",") : "";
+$("f_name").value = editing ? first.name || "" : "";
+$("f_category").value = editing ? first.category || "" : "";
+$("f_location").value = editing ? first.location || "" : "";
+$("f_note").value = editing ? first.note || "" : "";
+$("f_status").value = editing ? first.status : STATUSES[0]?.key;
+$("f_count").value = 1;
+// แก้ไขกลุ่ม: ซ่อนช่องจำนวน + สถานะเริ่มต้น (ย้ายสถานะทำจากบอร์ด)
+$("countWrap").style.display = editing ? "none" : "";
+$("statusWrap").style.display = editing ? "none" : "";
+$("modal").hidden = false;
+$("f_name").focus();
+}
+function closeForm() { $("modal").hidden = true; }
+function openUnitForm(unit) {
+$("u_id").value = unit.id;
+$("u_unit_id").textContent = unit.id;
+$("u_name").value = unit.name || "";
+$("u_serial").value = unit.serial || "";
+$("u_status").value = unit.status || STATUSES[0]?.key;
+$("u_location").value = unit.location || "";
+$("u_note").value = unit.note || "";
+$("unitModal").hidden = false;
+$("u_serial").focus();
+}
+function closeUnitForm() { $("unitModal").hidden = true; }
+async function onUnitSubmit(e) {
+e.preventDefault();
+const button = $("unitSaveBtn");
+button.disabled = true;
+try {
+await api("updateUnit", {
+id: $("u_id").value,
+fields: {
+serial: $("u_serial").value.trim(),
+status: $("u_status").value,
+location: $("u_location").value.trim(),
+note: $("u_note").value.trim(),
+},
+});
+closeUnitForm();
+await loadData();
+showBanner("บันทึกรายละเอียดรายชิ้นแล้ว", "ok");
+setTimeout(hideBanner, 1800);
+} catch (err) {
+showBanner("บันทึกรายชิ้นไม่สำเร็จ: " + err.message, "error");
+} finally {
+button.disabled = false;
+}
+}
+async function onSubmit(e) {
+e.preventDefault();
+const saveBtn = $("saveBtn");
+saveBtn.disabled = true;
+const idsRaw = $("f_ids").value;
+const fields = {
+name: $("f_name").value.trim(),
+category: $("f_category").value.trim(),
+location: $("f_location").value.trim(),
+note: $("f_note").value.trim(),
+};
+try {
+if (idsRaw) {
+const ids = idsRaw.split(",");
+await api("updateGroup", { ids, fields });
+} else {
+const count = Math.max(1, Number($("f_count").value) || 1);
+await api("add", { item: fields, status: $("f_status").value, count });
+}
+closeForm();
+await loadData();
+showBanner("บันทึกเรียบร้อย", "ok");
+setTimeout(hideBanner, 1800);
+} catch (err) {
+showBanner("บันทึกไม่สำเร็จ: " + err.message, "error");
+} finally {
+saveBtn.disabled = false;
+}
+}
+async function deleteUnit(u) {
+if (!confirm(`ลบ "${u.name}" 1 ชิ้น ใช่หรือไม่?`)) return;
+try { await api("delete", { id: u.id }); await loadData(); }
+catch (err) { showBanner("ลบไม่สำเร็จ: " + err.message, "error"); }
+}
+async function deleteGroup(units) {
+if (!confirm(`ลบ "${units[0].name}" ทั้งหมด ${units.length} ชิ้น ใช่หรือไม่?`)) return;
+try { await api("deleteGroup", { ids: units.map((u) => u.id) }); await loadData(); }
+catch (err) { showBanner("ลบไม่สำเร็จ: " + err.message, "error"); }
+}
+// ================================================================
+// เตรียมอุปกรณ์ออกกอง + Checklist รับคืน
+// ================================================================
+function showView(view, shouldLoad = true) {
+currentView = view;
+const inventory = view === "inventory";
+$("inventoryView").hidden = !inventory;
+$("productionsView").hidden = inventory;
+$("inventoryTab").classList.toggle("active", inventory);
+$("productionsTab").classList.toggle("active", !inventory);
+$("search").hidden = !inventory;
+$("addBtn").hidden = !inventory;
+if (inventory) {
+if (shouldLoad && !items.length) loadData();
+} else if (shouldLoad) {
+showProductionHome();
+loadProductions();
+}
+}
+async function loadProductions() {
+showBanner("กำลังโหลดรายการออกกอง…", "info");
+try {
+productions = await api("listProductions");
+renderProductions();
+hideBanner();
+} catch (err) {
+showBanner("โหลดรายการออกกองไม่สำเร็จ: " + err.message, "error");
+}
+}
+function renderProductions() {
+const host = $("productionList");
+host.innerHTML = "";
+if (!productions.length) {
+const empty = document.createElement("div");
+empty.className = "empty-panel";
+empty.textContent = "ยังไม่มีรายการออกกอง กด “สร้างกองใหม่” เพื่อเริ่มใช้งาน";
+host.appendChild(empty);
+return;
+}
+productions.forEach((job) => {
+const card = document.createElement("article");
+card.className = "production-card" + (job.status === "closed" ? " closed" : "");
+const top = document.createElement("div");
+top.className = "production-card-top";
+const title = document.createElement("h3");
+title.textContent = job.title;
+const badge = document.createElement("span");
+badge.className = "job-status" + (job.status === "closed" ? " closed" : "");
+badge.textContent = job.status === "closed" ? "ปิดกองแล้ว" : "กำลังเตรียม";
+top.append(title, badge);
+const meta = document.createElement("p");
+meta.textContent = [job.shootDate, job.location, job.owner].filter(Boolean).join(" · ") || job.id;
+const progress = document.createElement("div");
+progress.className = "job-progress";
+const percent = job.totalCount ? Math.round((job.returnedCount / job.totalCount) * 100) : 0;
+progress.innerHTML = `<div class="job-progress-track"><div class="job-progress-bar" style="width:${percent}%"></div></div>` +
+`<div class="job-progress-meta"><span>${job.totalCount} ชิ้น</span><span>รับกลับ ${job.returnedCount}/${job.totalCount}</span></div>`;
+card.append(top, meta, progress);
+card.addEventListener("click", () => openProduction(job.id));
+host.appendChild(card);
+});
+}
+function showProductionHome() {
+if (pendingChecklistUpdates.size) flushChecklistUpdates();
+currentProduction = null;
+$("productionHome").hidden = false;
+$("productionDetail").hidden = true;
+}
+async function openProduction(jobId) {
+if (currentProduction && currentProduction.job.id !== String(jobId)) await savePendingChecklistNow();
+showView("productions", false);
+showBanner("กำลังโหลด Checklist…", "info");
+try {
+currentProduction = await api("getProduction", { jobId });
+$("productionHome").hidden = true;
+$("productionDetail").hidden = false;
+renderProductionDetail();
+hideBanner();
+} catch (err) {
+showProductionHome();
+showBanner("เปิดรายการไม่สำเร็จ: " + err.message, "error");
+}
+}
+function renderProductionDetail() {
+if (!currentProduction) return;
+const job = currentProduction.job;
+$("jobTitle").textContent = job.title;
+$("jobMeta").textContent = [job.id, job.shootDate, job.location, job.owner].filter(Boolean).join(" · ");
+$("jobNote").textContent = job.note || "";
+$("jobNote").hidden = !job.note;
+$("jobStatusBadge").textContent = job.status === "closed" ? "ปิดกองแล้ว" : "กำลังเตรียม";
+$("jobStatusBadge").className = "job-status" + (job.status === "closed" ? " closed" : "");
+$("jobTotal").textContent = job.totalCount;
+$("jobTaken").textContent = job.takenCount;
+$("jobReturned").textContent = job.returnedCount;
+$("jobMissing").textContent = Math.max(0, job.takenCount - job.returnedCount);
+$("addJobEquipmentBtn").hidden = job.status === "closed";
+$("copyProductionBtn").hidden = job.status === "closed";
+$("closeJobBtn").textContent = job.status === "closed" ? "เปิดกองอีกครั้ง" : "ปิดกอง";
+renderChecklist();
+if (!pendingChecklistUpdates.size && !checklistSyncInFlight) updateChecklistSaveState("saved");
+}
+function renderChecklist() {
+const host = $("jobChecklist");
+host.innerHTML = "";
+const data = currentProduction.items || [];
+if (!data.length) {
+const empty = document.createElement("div");
+empty.className = "empty-panel";
+empty.textContent = "ยังไม่มีอุปกรณ์ในกองนี้ กด “เพิ่มอุปกรณ์” เพื่อเลือกรายชิ้น";
+host.appendChild(empty);
+return;
+}
+const groups = new Map();
+data.forEach((item) => {
+const category = normalizedCategory(item.category);
+if (!groups.has(category)) groups.set(category, []);
+groups.get(category).push(item);
+});
+[...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], "th")).forEach(([category, groupItems]) => {
+const section = document.createElement("section");
+section.className = "checklist-group";
+const head = document.createElement("div");
+head.className = "checklist-group-head";
+head.innerHTML = `<span class="category-dot" style="background:${categoryColor(category)}"></span><strong></strong><span>${groupItems.length} ชิ้น</span>`;
+head.querySelector("strong").textContent = category;
+section.appendChild(head);
+buildChecklistDisplayGroups(groupItems).forEach((itemGroup) => section.appendChild(renderChecklistRow(itemGroup)));
+host.appendChild(section);
+});
+}
+function buildChecklistDisplayGroups(itemsInCategory) {
+const result = [];
+const bulk = new Map();
+itemsInCategory.forEach((item) => {
+if (String(item.serial || "").trim()) {
+result.push([item]);
+} else {
+const key = item.equipmentId || item.name;
+if (!bulk.has(key)) bulk.set(key, []);
+bulk.get(key).push(item);
+}
+});
+bulk.forEach((group) => result.push(group));
+return result.sort((a, b) => a[0].name.localeCompare(b[0].name, "th"));
+}
+function renderChecklistRow(itemGroup) {
+const item = itemGroup[0];
+const isBulk = !item.serial;
+const allTaken = itemGroup.every((row) => row.taken);
+const someTaken = itemGroup.some((row) => row.taken);
+const allReturned = itemGroup.every((row) => row.returned);
+const someReturned = itemGroup.some((row) => row.returned);
+const row = document.createElement("div");
+row.className = "checklist-row";
+const info = document.createElement("div");
+info.className = "checklist-info";
+const name = document.createElement("strong");
+name.textContent = item.name + (isBulk ? ` · ${itemGroup.length} ชิ้น` : "");
+const unit = document.createElement("span");
+unit.textContent = isBulk
+? ["ไม่มี S/N", item.location].filter(Boolean).join(" · ")
+: ["S/N " + item.serial, item.unitId, item.location].filter(Boolean).join(" · ");
+info.append(name, unit);
+if (isBulk) {
+const ids = document.createElement("span");
+ids.className = "checklist-unit-ids";
+ids.textContent = "Unit ID: " + itemGroup.map((row) => row.unitId).join(", ");
+info.appendChild(ids);
+}
+const takenLabel = isBulk && someTaken && !allTaken ? `นำออก ${itemGroup.filter((row) => row.taken).length}/${itemGroup.length}` : "นำออก";
+const returnLabel = isBulk && someReturned && !allReturned ? `รับกลับ ${itemGroup.filter((row) => row.returned).length}/${itemGroup.length}` : "รับกลับ";
+const taken = checklistControl(takenLabel, allTaken, false, (checked) => {
+queueChecklistGroup(itemGroup, "taken", checked);
+});
+const returned = checklistControl(returnLabel, allReturned, true, (checked) => {
+queueChecklistGroup(itemGroup, "returned", checked);
+});
+taken.querySelector("input").indeterminate = someTaken && !allTaken;
+returned.querySelector("input").indeterminate = someReturned && !allReturned;
+returned.querySelector("input").disabled = currentProduction.job.status === "closed" || !allTaken;
+taken.querySelector("input").disabled = currentProduction.job.status === "closed";
+const remove = document.createElement("button");
+remove.type = "button";
+remove.className = "remove-checklist";
+remove.title = "นำรายการนี้ออก";
+remove.textContent = "×";
+remove.hidden = currentProduction.job.status === "closed" || someTaken;
+remove.addEventListener("click", () => removeProductionUnits(itemGroup));
+row.append(info, taken, returned, remove);
+return row;
+}
+function checklistControl(labelText, checked, isReturn, onChange) {
+const label = document.createElement("label");
+label.className = "check-control" + (isReturn ? " return" : "");
+const input = document.createElement("input");
+input.type = "checkbox";
+input.checked = checked;
+const text = document.createElement("span");
+text.textContent = labelText;
+input.addEventListener("change", () => onChange(input.checked, input));
+label.append(input, text);
+return label;
+}
+function queueChecklistGroup(itemGroup, field, value) {
+const updates = itemGroup.map((item) => ({ unitId: item.unitId, field, value }));
+if (field === "taken" && !value) {
+itemGroup.forEach((item) => updates.push({ unitId: item.unitId, field: "returned", value: false }));
+}
+applyChecklistUpdatesLocally(updates);
+updates.forEach((update) => pendingChecklistUpdates.set(update.unitId + "|" + update.field, update));
+recalculateProductionStats();
+renderProductionDetail();
+updateChecklistSaveState("saving");
+clearTimeout(checklistSyncTimer);
+checklistSyncTimer = setTimeout(flushChecklistUpdates, 260);
+}
+function applyChecklistUpdatesLocally(updates) {
+if (!currentProduction) return;
+const byUnit = Object.fromEntries(currentProduction.items.map((item) => [item.unitId, item]));
+updates.forEach((update) => {
+const item = byUnit[update.unitId];
+if (!item) return;
+item[update.field] = !!update.value;
+if (update.field === "taken" && !update.value) item.returned = false;
+});
+}
+function recalculateProductionStats() {
+if (!currentProduction) return;
+currentProduction.job.totalCount = currentProduction.items.length;
+currentProduction.job.takenCount = currentProduction.items.filter((item) => item.taken).length;
+currentProduction.job.returnedCount = currentProduction.items.filter((item) => item.returned).length;
+}
+async function flushChecklistUpdates() {
+if (checklistSyncInFlight) return checklistSyncPromise;
+if (!pendingChecklistUpdates.size || !currentProduction) return;
+const jobId = currentProduction.job.id;
+const updates = [...pendingChecklistUpdates.values()];
+pendingChecklistUpdates.clear();
+checklistSyncInFlight = true;
+checklistSyncPromise = (async () => {
+try {
+const saved = await api("setChecklistStates", { jobId, updates });
+if (currentProduction && currentProduction.job.id === jobId) {
+currentProduction = saved;
+const queuedAfterSave = [...pendingChecklistUpdates.values()];
+if (queuedAfterSave.length) applyChecklistUpdatesLocally(queuedAfterSave);
+recalculateProductionStats();
+renderProductionDetail();
+}
+updateChecklistSaveState(pendingChecklistUpdates.size ? "saving" : "saved");
+} catch (err) {
+updateChecklistSaveState("error");
+showBanner("บันทึก Checklist ไม่สำเร็จ กำลังโหลดสถานะล่าสุด: " + err.message, "error");
+pendingChecklistUpdates.clear();
+if (currentProduction && currentProduction.job.id === jobId) {
+try { currentProduction = await api("getProduction", { jobId }); renderProductionDetail(); } catch (_) {}
+}
+} finally {
+checklistSyncInFlight = false;
+checklistSyncPromise = null;
+if (pendingChecklistUpdates.size) checklistSyncTimer = setTimeout(flushChecklistUpdates, 80);
+}
+})();
+return checklistSyncPromise;
+}
+async function savePendingChecklistNow() {
+clearTimeout(checklistSyncTimer);
+while (pendingChecklistUpdates.size || checklistSyncInFlight) {
+await flushChecklistUpdates();
+if (checklistSyncPromise) await checklistSyncPromise;
+}
+}
+function updateChecklistSaveState(state) {
+const label = $("checklistSaveState");
+label.className = "save-state" + (state === "saving" ? " saving" : state === "error" ? " error" : "");
+label.textContent = state === "saving" ? "กำลังบันทึก…" : state === "error" ? "บันทึกไม่สำเร็จ" : "บันทึกแล้ว";
+}
+function openProductionForm() {
+productionFormMode = "create";
+$("productionForm").reset();
+$("productionModalTitle").textContent = "สร้างรายการออกกอง";
+$("productionSaveBtn").textContent = "สร้างรายการ";
+const now = new Date();
+$("p_date").value = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+$("productionModal").hidden = false;
+$("p_title").focus();
+}
+function openProductionEditForm() {
+if (!currentProduction) return;
+productionFormMode = "edit";
+const job = currentProduction.job;
+$("productionModalTitle").textContent = "แก้ไขรายละเอียดออกกอง";
+$("productionSaveBtn").textContent = "บันทึกการแก้ไข";
+$("p_title").value = job.title || "";
+$("p_date").value = job.shootDate || "";
+$("p_location").value = job.location || "";
+$("p_owner").value = job.owner || "";
+$("p_note").value = job.note || "";
+$("productionModal").hidden = false;
+$("p_title").focus();
+}
+function closeProductionForm() { $("productionModal").hidden = true; }
+async function onProductionSubmit(e) {
+e.preventDefault();
+const button = $("productionSaveBtn");
+button.disabled = true;
+const data = {
+title: $("p_title").value.trim(), shootDate: $("p_date").value,
+location: $("p_location").value.trim(), owner: $("p_owner").value.trim(),
+note: $("p_note").value.trim()
+};
+try {
+currentProduction = productionFormMode === "edit"
+? await api("updateProduction", { jobId: currentProduction.job.id, data })
+: await api("createProduction", { data });
+closeProductionForm();
+$("productionHome").hidden = true;
+$("productionDetail").hidden = false;
+renderProductionDetail();
+productions = await api("listProductions");
+renderProductions();
+showBanner(productionFormMode === "edit" ? "แก้ไขรายละเอียดแล้ว" : "สร้างกองแล้ว", "ok");
+setTimeout(hideBanner, 1800);
+} catch (err) {
+showBanner((productionFormMode === "edit" ? "แก้ไขกอง" : "สร้างกอง") + "ไม่สำเร็จ: " + err.message, "error");
+} finally {
+button.disabled = false;
+}
+}
+async function openCopyProductionForm() {
+if (!currentProduction) return;
+await savePendingChecklistNow();
+try {
+productions = await api("listProductions");
+const select = $("copySourceJob");
+select.innerHTML = "";
+const candidates = productions.filter((job) => job.id !== currentProduction.job.id && job.totalCount > 0);
+if (!candidates.length) {
+select.appendChild(new Option("ไม่มีกองอื่นที่มีรายการอุปกรณ์", ""));
+$("copyProductionSaveBtn").disabled = true;
+} else {
+select.appendChild(new Option("— เลือกกองต้นทาง —", ""));
+candidates.forEach((job) => {
+const label = [job.title, job.shootDate, job.totalCount + " ชิ้น"].filter(Boolean).join(" · ");
+select.appendChild(new Option(label, job.id));
+});
+$("copyProductionSaveBtn").disabled = false;
+}
+$("copyProductionModal").hidden = false;
+} catch (err) {
+showBanner("โหลดรายชื่อกองไม่สำเร็จ: " + err.message, "error");
+}
+}
+function closeCopyProductionForm() { $("copyProductionModal").hidden = true; }
+async function onCopyProductionSubmit(e) {
+e.preventDefault();
+const sourceJobId = $("copySourceJob").value;
+if (!sourceJobId || !currentProduction) return;
+const button = $("copyProductionSaveBtn");
+button.disabled = true;
+try {
+const result = await api("copyProductionItems", {
+targetJobId: currentProduction.job.id, sourceJobId
+});
+currentProduction = result.production;
+closeCopyProductionForm();
+renderProductionDetail();
+showBanner(`คัดลอกแล้ว ${result.copied} ชิ้น` + (result.skipped ? ` · ข้าม ${result.skipped} ชิ้น` : ""), "ok");
+setTimeout(hideBanner, 2600);
+} catch (err) {
+showBanner("คัดลอกรายการไม่สำเร็จ: " + err.message, "error");
+} finally {
+button.disabled = false;
+}
+}
+async function openUnitPicker() {
+if (!currentProduction) return;
+showBanner("กำลังโหลดอุปกรณ์…", "info");
+try {
+selectableUnits = await api("listProductionUnitOptions", { jobId: currentProduction.job.id });
+pickerSelection = new Set();
+pickerCategory = null;
+$("pickerSearch").value = "";
+renderUnitPicker();
+$("unitPickerModal").hidden = false;
+hideBanner();
+} catch (err) {
+showBanner("โหลดอุปกรณ์ไม่สำเร็จ: " + err.message, "error");
+}
+}
+function closeUnitPicker() { $("unitPickerModal").hidden = true; }
+function renderUnitPicker() {
+const host = $("pickerList");
+const q = $("pickerSearch").value.trim().toLowerCase();
+host.innerHTML = "";
+if (!pickerCategory) {
+renderPickerCategoryHome(host, q);
+updatePickerCount();
+return;
+}
+$("pickerBackBtn").hidden = false;
+const pickerCategoryLabel = pickerCategory === "__favorites__" ? "★ ใช้งานบ่อย" : pickerCategory;
+$("unitPickerTitle").textContent = pickerCategoryLabel;
+$("pickerHelp").textContent = "อุปกรณ์ที่มี S/N เลือกเป็นรายชิ้น · อุปกรณ์ที่ไม่มี S/N ใช้ปุ่ม − / + เพื่อระบุจำนวน";
+$("pickerSearch").placeholder = "ค้นหาอุปกรณ์ใน " + pickerCategoryLabel + "…";
+const filtered = selectableUnits.filter((unit) =>
+(pickerCategory === "__favorites__" ? unit.favorite : normalizedCategory(unit.category) === pickerCategory) &&
+(!q || [unit.name, unit.category, unit.serial, unit.id]
+.some((value) => String(value || "").toLowerCase().includes(q))));
+const groups = new Map();
+filtered.forEach((unit) => {
+const category = normalizedCategory(unit.category);
+if (!groups.has(category)) groups.set(category, []);
+groups.get(category).push(unit);
+});
+if (!filtered.length) {
+const empty = document.createElement("div");
+empty.className = "empty-panel";
+empty.textContent = "ไม่พบอุปกรณ์";
+host.appendChild(empty);
+}
+[...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], "th")).forEach(([category, categoryUnits]) => {
+const section = document.createElement("section");
+section.className = "picker-section";
+const head = document.createElement("div");
+head.className = "picker-category";
+head.innerHTML = `<span class="category-dot" style="background:${categoryColor(category)}"></span><strong></strong><span>${categoryUnits.length} ชิ้น</span>`;
+head.querySelector("strong").textContent = category;
+const body = document.createElement("div");
+body.className = "picker-category-body";
+const equipmentGroups = new Map();
+categoryUnits.forEach((unit) => {
+const key = unit.equipmentId || unit.name;
+if (!equipmentGroups.has(key)) equipmentGroups.set(key, []);
+equipmentGroups.get(key).push(unit);
+});
+[...equipmentGroups.values()].sort((a, b) => a[0].name.localeCompare(b[0].name, "th")).forEach((equipmentUnits) => {
+const withoutSerial = equipmentUnits.filter((unit) => !String(unit.serial || "").trim());
+const withSerial = equipmentUnits.filter((unit) => String(unit.serial || "").trim());
+if (withoutSerial.length) body.appendChild(renderBulkPickerItem(withoutSerial));
+withSerial.forEach((unit) => body.appendChild(renderSerializedPickerItem(unit)));
+});
+section.append(head, body);
+host.appendChild(section);
+});
+updatePickerCount();
+}
+function renderPickerCategoryHome(host, q) {
+$("pickerBackBtn").hidden = true;
+$("unitPickerTitle").textContent = "เลือก Category";
+$("pickerHelp").textContent = "เลือก Category ที่ต้องการก่อน แล้วจึงเลือกอุปกรณ์ภายใน";
+$("pickerSearch").placeholder = "ค้นหา Category หรือชื่ออุปกรณ์…";
+const categories = new Map();
+selectableUnits.forEach((unit) => {
+const category = normalizedCategory(unit.category);
+if (!categories.has(category)) categories.set(category, []);
+categories.get(category).push(unit);
+});
+const matches = [...categories.entries()].filter(([category, units]) => {
+if (!q) return true;
+return category.toLowerCase().includes(q) || units.some((unit) =>
+[unit.name, unit.serial, unit.id].some((value) => String(value || "").toLowerCase().includes(q))
+);
+}).sort((a, b) => a[0].localeCompare(b[0], "th"));
+const favoriteUnits = selectableUnits.filter((unit) => unit.favorite && (!q ||
+[unit.name, unit.category, unit.serial, unit.id, "ใช้งานบ่อย"].some((value) => String(value || "").toLowerCase().includes(q))));
+if (!matches.length && !favoriteUnits.length) {
+const empty = document.createElement("div");
+empty.className = "empty-panel";
+empty.textContent = "ไม่พบ Category หรืออุปกรณ์ที่ค้นหา";
+host.appendChild(empty);
+return;
+}
+const grid = document.createElement("div");
+grid.className = "picker-category-grid";
+const addCategoryCard = (category, units, favoriteCard) => {
+const card = document.createElement("button");
+card.type = "button";
+card.className = "picker-category-card" + (favoriteCard ? " favorite" : "");
+const icon = document.createElement("span");
+icon.className = "picker-category-icon";
+icon.style.setProperty("--category", favoriteCard ? "#d6b900" : categoryColor(category));
+icon.textContent = favoriteCard ? "★" : category.slice(0, 1).toUpperCase();
+const copy = document.createElement("span");
+copy.className = "picker-category-copy";
+const title = document.createElement("strong");
+title.textContent = category;
+const typeCount = new Set(units.map((unit) => unit.equipmentId || unit.name)).size;
+const available = units.filter((unit) => !unit.selected && !unit.unavailableJobId).length;
+const selectedNow = units.filter((unit) => pickerSelection.has(unit.id)).length;
+const meta = document.createElement("span");
+meta.textContent = `${typeCount} ชนิด · เลือกได้ ${available} ชิ้น` + (selectedNow ? ` · เลือกไว้ ${selectedNow}` : "");
+copy.append(title, meta);
+const arrow = document.createElement("span");
+arrow.className = "picker-category-arrow";
+arrow.textContent = "›";
+card.append(icon, copy, arrow);
+card.addEventListener("click", () => {
+pickerCategory = favoriteCard ? "__favorites__" : category;
+$("pickerSearch").value = "";
+renderUnitPicker();
+});
+grid.appendChild(card);
+};
+if (favoriteUnits.length) addCategoryCard("ใช้งานบ่อย", favoriteUnits, true);
+matches.forEach(([category, units]) => addCategoryCard(category, units, false));
+host.appendChild(grid);
+}
+function renderBulkPickerItem(group) {
+const row = document.createElement("div");
+row.className = "picker-bulk";
+const statusOrder = { good: 0, partial: 1, repair: 2, broke: 3 };
+const eligible = group.filter((unit) => !unit.selected && !unit.unavailableJobId)
+.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+const alreadySelected = group.filter((unit) => unit.selected).length;
+const unavailable = group.filter((unit) => unit.unavailableJobId).length;
+const locations = [...new Set(group.map((unit) => unit.location).filter(Boolean))];
+const info = document.createElement("div");
+info.className = "picker-bulk-info";
+const title = document.createElement("strong");
+title.textContent = group[0].name;
+const meta = document.createElement("span");
+const statusSummary = [...new Set(group.map((unit) => unit.status))].map((status) => {
+const count = group.filter((unit) => unit.status === status).length;
+return (STATUS_MAP[status]?.label || status) + " " + count;
+}).join(", ");
+meta.textContent = [`ทั้งหมด ${group.length} ชิ้น`, "ไม่มี S/N", statusSummary, locations.join(", ")].filter(Boolean).join(" · ");
+const availability = document.createElement("span");
+availability.className = "picker-availability";
+availability.textContent = [`เลือกได้ ${eligible.length}`, alreadySelected ? `อยู่ในกองนี้แล้ว ${alreadySelected}` : "", unavailable ? `ติดกองอื่น ${unavailable}` : ""].filter(Boolean).join(" · ");
+info.append(title, meta, availability);
+const stepper = document.createElement("div");
+stepper.className = "qty-stepper";
+const minus = document.createElement("button");
+minus.type = "button";
+minus.textContent = "−";
+const value = document.createElement("strong");
+const countSelected = () => eligible.filter((unit) => pickerSelection.has(unit.id)).length;
+value.textContent = countSelected();
+const plus = document.createElement("button");
+plus.type = "button";
+plus.textContent = "+";
+const change = (delta) => {
+let next = Math.max(0, Math.min(eligible.length, countSelected() + delta));
+eligible.forEach((unit) => pickerSelection.delete(unit.id));
+eligible.slice(0, next).forEach((unit) => pickerSelection.add(unit.id));
+value.textContent = next;
+minus.disabled = next === 0;
+plus.disabled = next === eligible.length;
+updatePickerCount();
+};
+minus.disabled = countSelected() === 0;
+plus.disabled = countSelected() === eligible.length;
+minus.addEventListener("click", () => change(-1));
+plus.addEventListener("click", () => change(1));
+stepper.append(minus, value, plus);
+row.append(info, createFavoriteButton(group[0].equipmentId, !!group[0].favorite), stepper);
+return row;
+}
+function renderSerializedPickerItem(unit) {
+const label = document.createElement("label");
+label.className = "picker-item";
+const input = document.createElement("input");
+input.type = "checkbox";
+input.dataset.unit = unit.id;
+input.checked = pickerSelection.has(unit.id);
+input.disabled = unit.selected || !!unit.unavailableJobId;
+input.addEventListener("change", () => {
+if (input.checked) pickerSelection.add(unit.id); else pickerSelection.delete(unit.id);
+updatePickerCount();
+});
+const info = document.createElement("div");
+const title = document.createElement("strong");
+title.textContent = unit.name;
+const meta = document.createElement("span");
+meta.textContent = ["S/N " + unit.serial, unit.id, unit.location].filter(Boolean).join(" · ");
+info.append(title, meta);
+const status = document.createElement("span");
+status.className = "picker-status";
+status.textContent = unit.selected ? "เลือกแล้ว" : (unit.unavailableJobId ? "อยู่กอง " + unit.unavailableJobTitle : (STATUS_MAP[unit.status]?.label || unit.status));
+label.append(input, info, createFavoriteButton(unit.equipmentId, !!unit.favorite), status);
+return label;
+}
+function createFavoriteButton(equipmentId, isFavorite) {
+const button = document.createElement("button");
+button.type = "button";
+button.className = "favorite-btn" + (isFavorite ? " active" : "");
+button.textContent = isFavorite ? "★" : "☆";
+button.title = isFavorite ? "นำออกจากรายการใช้งานบ่อย" : "เพิ่มในรายการใช้งานบ่อย";
+button.addEventListener("click", (event) => {
+event.preventDefault();
+event.stopPropagation();
+toggleEquipmentFavorite(equipmentId, !button.classList.contains("active"));
+});
+return button;
+}
+async function toggleEquipmentFavorite(equipmentId, value) {
+selectableUnits.forEach((unit) => {
+if (unit.equipmentId === equipmentId) unit.favorite = value;
+});
+renderUnitPicker();
+try {
+await api("setEquipmentFavorite", { equipmentId, value });
+} catch (err) {
+selectableUnits.forEach((unit) => {
+if (unit.equipmentId === equipmentId) unit.favorite = !value;
+});
+renderUnitPicker();
+showBanner("บันทึกรายการโปรดไม่สำเร็จ: " + err.message, "error");
+}
+}
+function updatePickerCount() {
+const count = pickerSelection.size;
+$("pickerCount").textContent = "เลือก " + count + " ชิ้น";
+$("pickerSelectedCount").textContent = count;
+$("pickerAddBtn").disabled = count === 0;
+renderPickerSelection();
+}
+function renderPickerSelection() {
+const host = $("pickerSelectedList");
+host.innerHTML = "";
+const selectedUnits = selectableUnits.filter((unit) => pickerSelection.has(unit.id));
+if (!selectedUnits.length) {
+const empty = document.createElement("div");
+empty.className = "picker-selected-empty";
+empty.textContent = "ยังไม่ได้เลือกอุปกรณ์";
+host.appendChild(empty);
+return;
+}
+const displayGroups = [];
+const bulkGroups = new Map();
+selectedUnits.forEach((unit) => {
+if (String(unit.serial || "").trim()) {
+displayGroups.push([unit]);
+} else {
+const key = unit.equipmentId || unit.name;
+if (!bulkGroups.has(key)) bulkGroups.set(key, []);
+bulkGroups.get(key).push(unit);
+}
+});
+bulkGroups.forEach((group) => displayGroups.push(group));
+displayGroups.sort((a, b) => a[0].name.localeCompare(b[0].name, "th")).forEach((group) => {
+const first = group[0];
+const card = document.createElement("div");
+card.className = "picker-selected-item";
+const marker = document.createElement("span");
+marker.className = "category-dot";
+marker.style.background = categoryColor(normalizedCategory(first.category));
+const copy = document.createElement("div");
+const title = document.createElement("strong");
+title.textContent = first.name + (!first.serial ? ` · ${group.length} ชิ้น` : "");
+const meta = document.createElement("span");
+meta.textContent = first.serial
+? [first.category, "S/N " + first.serial, first.id].filter(Boolean).join(" · ")
+: [first.category, "ไม่มี S/N"].filter(Boolean).join(" · ");
+copy.append(title, meta);
+const remove = document.createElement("button");
+remove.type = "button";
+remove.title = "นำออกจากรายการที่เลือก";
+remove.textContent = "×";
+remove.addEventListener("click", () => {
+group.forEach((unit) => pickerSelection.delete(unit.id));
+renderUnitPicker();
+});
+card.append(marker, copy, remove);
+host.appendChild(card);
+});
+}
+async function addSelectedUnits() {
+const unitIds = [...pickerSelection];
+if (!unitIds.length) return;
+const button = $("pickerAddBtn");
+button.disabled = true;
+try {
+currentProduction = await api("addProductionUnits", { jobId: currentProduction.job.id, unitIds });
+closeUnitPicker();
+renderProductionDetail();
+} catch (err) {
+showBanner("เพิ่มอุปกรณ์ไม่สำเร็จ: " + err.message, "error");
+} finally {
+button.disabled = false;
+}
+}
+async function removeProductionUnits(itemGroup) {
+const first = itemGroup[0];
+if (!confirm(`นำ “${first.name}” ${itemGroup.length} ชิ้น ออกจากรายการนี้ใช่หรือไม่?`)) return;
+try {
+currentProduction = await api("removeProductionUnits", {
+jobId: currentProduction.job.id, unitIds: itemGroup.map((item) => item.unitId)
+});
+renderProductionDetail();
+} catch (err) {
+showBanner("นำรายการออกไม่สำเร็จ: " + err.message, "error");
+}
+}
+async function toggleProductionClosed() {
+if (!currentProduction) return;
+await savePendingChecklistNow();
+const job = currentProduction.job;
+if (job.status !== "closed" && !confirm("ปิดกองนี้หลังตรวจรับอุปกรณ์ครบแล้วใช่หรือไม่?")) return;
+try {
+currentProduction = await api(job.status === "closed" ? "reopenProduction" : "closeProduction", { jobId: job.id });
+renderProductionDetail();
+productions = await api("listProductions");
+renderProductions();
+} catch (err) {
+showBanner("เปลี่ยนสถานะกองไม่สำเร็จ: " + err.message, "error");
+}
+}
+async function copyProductionLink() {
+if (!currentProduction) return;
+const url = currentProduction.shareUrl;
+try {
+await navigator.clipboard.writeText(url);
+showBanner("คัดลอกลิงก์กองแล้ว", "ok");
+setTimeout(hideBanner, 1800);
+} catch (err) {
+window.prompt("คัดลอกลิงก์นี้", url);
+}
+}
+// ================================================================
+// Helpers
+// ================================================================
+function buildCategoryList() {
+const cats = [...new Set(items.map((it) => it.category).filter(Boolean))].sort();
+const dl = $("categoryList");
+dl.innerHTML = "";
+for (const c of cats) dl.appendChild(new Option(c));
+}
+function buildCategoryFilters() {
+const host = $("categoryFilters");
+const typesByCategory = new Map();
+const allTypes = new Set();
+for (const item of items) {
+const category = normalizedCategory(item.category);
+const typeKey = category + "||" + (item.name || "").trim().toLowerCase();
+if (!typesByCategory.has(category)) typesByCategory.set(category, new Set());
+typesByCategory.get(category).add(typeKey);
+allTypes.add(typeKey);
+}
+const categories = [...typesByCategory.keys()].sort((a, b) => a.localeCompare(b, "th"));
+if (selectedCategory !== "__all__" && !typesByCategory.has(selectedCategory)) selectedCategory = "__all__";
+host.innerHTML = "";
+const addFilter = (value, label, count, color) => {
+const button = document.createElement("button");
+button.type = "button";
+button.className = "category-filter" + (selectedCategory === value ? " active" : "");
+button.innerHTML = `<span class="category-dot" style="background:${color}"></span>` +
+`<span>${label}</span><span class="category-count">${count}</span>`;
+button.addEventListener("click", () => {
+selectedCategory = value;
+expanded.clear();
+buildCategoryFilters();
+render();
+});
+host.appendChild(button);
+};
+addFilter("__all__", "ทั้งหมด", allTypes.size, "#02d767");
+for (const category of categories) {
+addFilter(category, category, typesByCategory.get(category).size, categoryColor(category));
+}
+}
+function showBanner(msg, type) {
+banner.textContent = msg;
+banner.className = "banner wrap " + (type || "info");
+banner.hidden = false;
+}
+function hideBanner() { banner.hidden = true; }
+document.addEventListener("DOMContentLoaded", init);
+})();
+</script>
